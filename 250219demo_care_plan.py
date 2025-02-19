@@ -36,8 +36,7 @@ if not api_key:
 # OpenAI APIクライアントの初期化
 try:
     client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.openai.com/v1"  # 明示的にベースURLを指定
+        api_key=api_key
     )
 except Exception as e:
     st.error(f'OpenAI APIクライアントの初期化に失敗しました: {str(e)}')
