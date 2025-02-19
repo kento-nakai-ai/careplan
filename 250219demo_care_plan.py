@@ -19,13 +19,16 @@ import zipfile  # ZIP圧縮用
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # 日本語フォント用
 from reportlab.lib.units import mm  # PDFの単位設定用
 
-# 環境変数の読み込み
+# 環境変数の読み込み（ローカル開発用）
 load_dotenv()
 
 # OpenAI APIクライアントの初期化
-client = OpenAI(
-    api_key=os.getenv('OPENAI_API_KEY')  # 環境変数からAPIキーを取得
-)
+if 'OPENAI_API_KEY' not in st.secrets and not os.getenv('OPENAI_API_KEY'):
+    st.error('OpenAI APIキーが設定されていません。')
+    st.stop()
+
+api_key = st.secrets.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+client = OpenAI(api_key=api_key)
 
 # Streamlitページの基本設定
 st.set_page_config(
