@@ -1,57 +1,78 @@
-import streamlit as st
-import pandas as pd
-from datetime import datetime
-from openai import OpenAI
-import os
-from dotenv import load_dotenv
-import openpyxl
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from io import BytesIO
-import tempfile
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-import zipfile
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.lib.units import mm
+# 必要なライブラリのインポート
+import streamlit as st  # Webアプリケーションフレームワーク
+import pandas as pd  # データ操作・分析用ライブラリ
+from datetime import datetime  # 日付・時刻操作用
+from openai import OpenAI  # OpenAI APIクライアント
+import os  # OS関連の操作用
+from dotenv import load_dotenv  # 環境変数読み込み用
+import openpyxl  # Excel操作用
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side  # Excelのスタイル設定用
+from io import BytesIO  # バイナリデータ操作用
+import tempfile  # 一時ファイル作成用
+from reportlab.pdfgen import canvas  # PDF生成用
+from reportlab.pdfbase import pdfmetrics  # PDFフォント管理用
+from reportlab.pdfbase.ttfonts import TTFont  # PDFフォント設定用
+from reportlab.lib.pagesizes import A4  # PDFページサイズ設定用
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer  # PDF要素作成用
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle  # PDFスタイル設定用
+import zipfile  # ZIP圧縮用
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # 日本語フォント用
+from reportlab.lib.units import mm  # PDFの単位設定用
 
 # 環境変数の読み込み
 load_dotenv()
 
-# OpenAI クライアントの設定
+# OpenAI APIクライアントの初期化
 client = OpenAI(
-    api_key=os.getenv('OPENAI_API_KEY')
+    api_key=os.getenv('OPENAI_API_KEY')  # 環境変数からAPIキーを取得
 )
 
-# ページ設定
+# Streamlitページの基本設定
 st.set_page_config(
-    page_title="EGAO-AI デモ",
-    page_icon="👥",
-    layout="wide"
+    page_title="EGAO-AI デモ",  # ページタイトル
+    page_icon="👥",  # ページアイコン
+    layout="wide"  # ページレイアウト（ワイド）
 )
 
 # セッション状態の初期化
+# 生成されたケアプランを保存する変数
 if 'generated_care_plan' not in st.session_state:
     st.session_state.generated_care_plan = None
 
+# ケアプラン履歴を保存するリスト
 if 'care_plan_history' not in st.session_state:
     st.session_state.care_plan_history = []
 
 def get_adl_status_color(status):
-    """ADL状態に応じたカラーコードを返す"""
+    """
+    ADL状態に応じたカラーコードを返す関数
+    
+    Args:
+        status (str): ADL状態（要全介助、一部介助、見守り、自立）
+    
+    Returns:
+        str: カラーコード（HEX形式）
+    """
     colors = {
-        "要全介助": "#ff6b6b",  # 赤 - 最も介助が必要
-        "一部介助": "#ffd93d",  # 黄 - 部分的な介助が必要
-        "見守り": "#a3dc2e",    # 薄緑 - 自立に近い
-        "自立": "#4CAF50"       # 緑 - 完全に自立
+        "要全介助": "#ff6b6b",  # 赤色 - 最も介助が必要な状態
+        "一部介助": "#ffd93d",  # 黄色 - 部分的な介助が必要な状態
+        "見守り": "#a3dc2e",    # 薄緑色 - 自立に近い状態
+        "自立": "#4CAF50"       # 緑色 - 完全に自立している状態
     }
-    return colors.get(status, "#ffffff")
+    return colors.get(status, "#ffffff")  # 該当するステータスがない場合は白色を返す
 
 def get_adl_description(item, status):
-    """ADL項目と状態に応じた説明文を返す"""
+    """
+    ADL項目と状態に応じた説明文を返す関数
+    
+    Args:
+        item (str): ADL項目（食事、排泄など）
+        status (str): ADL状態（要全介助、一部介助、見守り、自立）
+    
+    Returns:
+        str: 詳細な説明文
+    """
+    # 各ADL項目ごとの状態説明を辞書形式で定義
     descriptions = {
         "食事": {
             "要全介助": "食事の全過程で介助が必要（食事の準備から片付けまで、食べる動作すべてに介助が必要）",
@@ -519,99 +540,68 @@ def create_care_plan_excel(user_info, adl_data, care_plan):
 def generate_care_plan(user_info, adl_data, client_needs):
     """OpenAI APIを使用してケアプラン生成"""
     try:
-        # 認定状態の文字列生成
-        plan_status = []
-        if user_info['plan_status']['initial']:
-            plan_status.append("初回")
-        if user_info['plan_status']['introduced']:
-            plan_status.append("紹介")
-        if user_info['plan_status']['continuous']:
-            plan_status.append("継続")
-        plan_status = "・".join(plan_status) if plan_status else "なし"
-        
-        recognition_status = []
-        if user_info['plan_status']['certified']:
-            recognition_status.append("認定済")
-        if user_info['plan_status']['applying']:
-            recognition_status.append("申請中")
-        recognition_status = "・".join(recognition_status) if recognition_status else "なし"
+        # C1: 前提条件設定
+        narrative = f"{user_info['name']}様は{user_info['care_level']}で、{adl_data}の状態です。"
+        ambivalent = client_needs
+        issue = "ADLの改善と生活の質の向上"
+
+        # C2: クライアント情報の検証
+        if not validate_client_info(user_info, adl_data, client_needs):
+            return None
+
+        # C3: ルールと目標の定義
+        rules_and_goals = define_rules_and_goals(adl_data)
+        if not rules_and_goals:
+            return None
 
         # プロンプトの構築
         prompt = f"""
-以下の情報を元に、居住サービス計画書（第1表～第3表）を作成してください。
-特に第2表の内容は、以下の形式で具体的に出力してください。
+以下の情報を元に、居宅サービス計画書を作成してください。
+特に以下の点に注意して作成してください：
+
+1. ステージ改善（1-5）を目指し、現在のステージから上位を目指す
+2. 意欲向上（0-2）に焦点を当て、特に起床・リハビリ、意思疎通・食事、排泄の順で改善
+3. 医療情報に基づく具体的な注意事項の反映
 
 【基本情報】
-利用者名: {user_info['name']}
-生年月日: {user_info['birth_date']}
-住所: {user_info['address']}
-居宅サービス計画作成者: {user_info['care_manager']}
-事業所: {user_info['care_office']}
-所在地: {user_info['office_address']}
-
-【認定情報】
-計画区分: {plan_status}
-認定状況: {recognition_status}
-要介護度: {user_info['care_level']}
-認定日: {user_info['certification_date']}
-有効期間: {user_info['valid_from']} ～ {user_info['valid_to']}
-計画作成日: {user_info['plan_date']}
-初回計画作成日: {user_info['initial_plan_date']}
+{narrative}
 
 【利用者・家族の意向】
-{user_info['client_family_intentions']}
+{ambivalent}
 
-【介護認定審査会の意見】
-{user_info['certification_opinion']}
-
-【総合的な援助の方針】
-{user_info['support_policy']}
-
-【生活援助中心型の算定理由】
-{user_info['care_reason']}
+【生活全般の解決すべき課題】
+{issue}
 
 【ADL評価】
 {pd.DataFrame([adl_data]).T.to_string()}
 
-【利用者・家族の要望】
-{client_needs}
-
 以下の形式で出力してください：
 
 【第1表】
-■利用者・家族の意向と総合的な援助の方針
+■利用者・家族の意向
+■総合的な援助の方針（ICFの観点を含む）
 ■解決すべき課題
-■サービス提供の意向
 
 【第2表】
-各課題について以下の形式で出力してください：
+■生活全般の解決すべき課題（3つ以上）：
+1. 歩行ステージの改善（最優先）
+2. 排泄ステージの改善
+3. 入浴ステージの改善
+4. 睡眠改善課題（変更不可）
+5. 栄養改善課題（変更不可）
 
-■生活全般の解決すべき課題（ニーズ）：
-（課題1の内容）
-
-■援助目標
-長期目標：（6ヶ月後の目標）
-期間：6ヶ月
-短期目標：（3ヶ月後の目標）
-期間：3ヶ月
-
-■援助内容
-サービス内容：（具体的なサービス内容）
-保険給付：○（保険給付対象の場合）
-サービス種別：（例：訪問介護、通所介護など）
-事業所：（サービス提供事業所名）
-頻度：（週○回、月○回など）
-期間：（○ヶ月間）
-
-（以降、課題2、3...について同様に記載）
+各課題について：
+・長期目標（12ヶ月以内）
+・短期目標（6ヶ月以内）
+・具体的なサービス内容（3つ以上）
+・サービス担当者（介護士/看護師/機能訓練指導員/医師/薬剤師/サービススタッフ）
 
 【第3表】
-■週間サービス計画
-■主な日常生活上の活動
-■家族の支援・連携内容
-■サービス提供上の留意事項
+■週間サービス計画（1時間刻みの24時間計画）
+■サービス提供体制
 """
 
+        # C4-C6: ケアプラン生成
         response = client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
@@ -622,7 +612,22 @@ def generate_care_plan(user_info, adl_data, client_needs):
             max_tokens=2000
         )
 
-        return response.choices[0].message.content
+        # C7: 出力の評価
+        care_plan = response.choices[0].message.content
+        quality_score = evaluate_care_plan(care_plan)
+
+        # C8: 品質が不十分な場合、再生成
+        while quality_score < 100 and iteration_count < 3:
+            care_plan = regenerate_care_plan(prompt)
+            quality_score = evaluate_care_plan(care_plan)
+
+        # C9: 最終出力の生成
+        final_care_plan = format_final_care_plan(care_plan)
+
+        # C10: 継続的改善
+        update_knowledge_base(care_plan, quality_score)
+
+        return final_care_plan
 
     except Exception as e:
         st.error(f"ケアプラン生成中にエラーが発生しました: {str(e)}")
@@ -1361,6 +1366,333 @@ def edit_care_plan_issue():
                     st.session_state.care_plan_data['issues'].pop(i)
                     st.rerun()
 
+def validate_client_info(user_info, adl_data, client_needs):
+    """クライアント情報の検証"""
+    if not user_info or not adl_data or not client_needs:
+        st.error("クライアントの情報が不足しています。")
+        return False
+    return True
+
+def define_rules_and_goals(adl_data):
+    """ルールと目標の定義"""
+    stages = calculate_stages(adl_data)
+    motivation = calculate_motivation(adl_data)
+    return {
+        'stages': stages,
+        'motivation': motivation,
+        'goals': generate_goals(stages, motivation)
+    }
+
+def evaluate_care_plan(care_plan):
+    """ケアプランの品質評価"""
+    score = 100
+    required_elements = [
+        "第1表", "第2表", "第3表",
+        "睡眠改善課題", "栄養改善課題",
+        "長期目標", "短期目標"
+    ]
+    
+    for element in required_elements:
+        if element not in care_plan:
+            score -= 10
+    
+    return score
+
+def format_final_care_plan(care_plan):
+    """最終的なケアプランのフォーマット"""
+    # ケアプランの形式を整える
+    formatted_plan = care_plan.replace("\n\n", "\n")
+    return formatted_plan
+
+def update_knowledge_base(care_plan, quality_score):
+    """知識ベースの更新"""
+    # 将来の改善のために情報を保存
+    if 'care_plan_quality_history' not in st.session_state:
+        st.session_state.care_plan_quality_history = []
+    
+    st.session_state.care_plan_quality_history.append({
+        'timestamp': datetime.now(),
+        'quality_score': quality_score,
+        'improvements_needed': quality_score < 100
+    })
+
+def calculate_stages(adl_data):
+    """ADLデータからステージを計算"""
+    stage_weights = {
+        "要全介助": 1,
+        "一部介助": 2,
+        "見守り": 3,
+        "自立": 4
+    }
+    
+    # 各ADL項目のステージ値を計算
+    stage_values = {}
+    for item, status in adl_data.items():
+        stage_values[item] = stage_weights.get(status, 1)
+    
+    # 重要度に基づいて総合ステージを計算
+    priority_items = {
+        "移動": 1.5,
+        "排泄": 1.3,
+        "食事": 1.2,
+        "入浴": 1.1
+    }
+    
+    total_weight = sum(priority_items.values()) + (len(adl_data) - len(priority_items))
+    weighted_sum = 0
+    
+    for item, stage in stage_values.items():
+        weight = priority_items.get(item, 1.0)
+        weighted_sum += stage * weight
+    
+    average_stage = weighted_sum / total_weight
+    
+    # ステージを1-5の範囲に変換
+    final_stage = int((average_stage / 4) * 5)
+    return max(1, min(5, final_stage))
+
+def calculate_motivation(adl_data):
+    """ADLデータからモチベーションレベルを計算"""
+    motivation_indicators = {
+        "コミュニケーション": 1.5,
+        "認知機能": 1.3,
+        "睡眠": 1.2
+    }
+    
+    status_scores = {
+        "要全介助": 0,
+        "一部介助": 1,
+        "見守り": 1.5,
+        "自立": 2
+    }
+    
+    total_weight = sum(motivation_indicators.values())
+    weighted_sum = 0
+    
+    for item, weight in motivation_indicators.items():
+        if item in adl_data:
+            status = adl_data[item]
+            score = status_scores.get(status, 0)
+            weighted_sum += score * weight
+    
+    motivation_level = weighted_sum / total_weight
+    return round(motivation_level, 1)
+
+def generate_goals(stages, motivation):
+    """ステージとモチベーションに基づいて目標を生成"""
+    goals = {
+        "short_term": [],
+        "long_term": []
+    }
+    
+    # ステージに基づく目標設定
+    stage_goals = {
+        1: {
+            "short": "基本的なADLの安定",
+            "long": "一部介助レベルへの改善"
+        },
+        2: {
+            "short": "介助量の軽減",
+            "long": "見守りレベルへの改善"
+        },
+        3: {
+            "short": "見守り場面の特定",
+            "long": "部分的な自立達成"
+        },
+        4: {
+            "short": "自立範囲の拡大",
+            "long": "完全自立の維持"
+        },
+        5: {
+            "short": "現状機能の維持",
+            "long": "社会参加の促進"
+        }
+    }
+    
+    # モチベーションに基づく追加目標
+    motivation_goals = {
+        0: {
+            "short": "基本的なコミュニケーションの確立",
+            "long": "意思表示の改善"
+        },
+        1: {
+            "short": "日常的な意思疎通の向上",
+            "long": "積極的な活動参加"
+        },
+        2: {
+            "short": "社会的交流の促進",
+            "long": "自己実現の支援"
+        }
+    }
+    
+    # 目標の設定
+    stage_level = min(5, max(1, stages))
+    motivation_level = min(2, max(0, int(motivation)))
+    
+    goals["short_term"].extend([
+        stage_goals[stage_level]["short"],
+        motivation_goals[motivation_level]["short"]
+    ])
+    
+    goals["long_term"].extend([
+        stage_goals[stage_level]["long"],
+        motivation_goals[motivation_level]["long"]
+    ])
+    
+    return goals
+
+def generate_intentions_text(user_info, adl_data):
+    """利用者・家族の意向のテキストを生成"""
+    try:
+        prompt = f"""
+あなたは経験豊富な介護支援専門員です。以下の情報を元に、利用者・家族の生活に対する意向を記載してください。
+
+利用者情報：
+- 氏名：{user_info['name']}様
+- 要介護度：{user_info['care_level']}
+- ADL状態：
+{pd.DataFrame([adl_data]).T.to_string()}
+
+以下の点に注意して記載してください：
+1. 利用者本人の意向を最優先に記載
+2. 家族の意向も考慮
+3. 現実的で具体的な内容
+4. 本人の強みや残存機能を活かした内容
+5. 社会参加や生きがいに関する内容も含める
+
+出力形式：
+【利用者本人の意向】
+・
+・
+・
+
+【家族の意向】
+・
+・
+・
+"""
+        response = client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": "あなたは経験豊富な介護支援専門員です。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        st.error(f"テキスト生成中にエラーが発生しました: {str(e)}")
+        return None
+
+def generate_certification_opinion(user_info, adl_data):
+    """認定審査会の意見を生成"""
+    try:
+        prompt = f"""
+あなたは介護認定審査会の委員です。以下の情報を元に、介護認定審査会の意見を記載してください。
+
+利用者情報：
+- 氏名：{user_info['name']}様
+- 要介護度：{user_info['care_level']}
+- ADL状態：
+{pd.DataFrame([adl_data]).T.to_string()}
+
+以下の点に注意して記載してください：
+1. 要介護状態の原因疾患や障害の状況
+2. 介護の手間や必要な支援の内容
+3. 改善可能性や予防の視点
+4. 医学的管理の必要性
+5. 推奨されるサービスの種類
+
+出力形式：
+1. 要介護状態の状況：
+・
+
+2. 改善可能性と予防：
+・
+
+3. 医学的管理の必要性：
+・
+
+4. 推奨サービス：
+・
+"""
+        response = client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": "あなたは介護認定審査会の委員です。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        st.error(f"テキスト生成中にエラーが発生しました: {str(e)}")
+        return None
+
+def generate_support_policy(user_info, adl_data, intentions, certification_opinion):
+    """総合的な援助の方針を生成"""
+    try:
+        prompt = f"""
+あなたは経験豊富な介護支援専門員です。以下の情報を元に、総合的な援助の方針を記載してください。
+
+利用者情報：
+- 氏名：{user_info['name']}様
+- 要介護度：{user_info['care_level']}
+- ADL状態：
+{pd.DataFrame([adl_data]).T.to_string()}
+
+利用者・家族の意向：
+{intentions}
+
+認定審査会の意見：
+{certification_opinion}
+
+以下の点に注意して記載してください：
+1. ICFの視点（心身機能・身体構造、活動、参加）を含める
+2. 短期・長期の目標を明確に
+3. 具体的なサービス内容と期待される効果
+4. リスク管理と予防的視点
+5. 多職種連携の方針
+6. モニタリング方法
+
+出力形式：
+1. 生活全般の解決すべき課題：
+・
+
+2. 総合的な援助の方針：
+・
+
+3. サービス提供の方針：
+・
+
+4. リスク管理と予防：
+・
+
+5. 多職種連携方針：
+・
+"""
+        response = client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": "あなたは経験豊富な介護支援専門員です。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1500
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        st.error(f"テキスト生成中にエラーが発生しました: {str(e)}")
+        return None
+
 def main():
     st.markdown("""
         <h1 style='color: #1E88E5; font-size: 32px;'>
@@ -1452,24 +1784,86 @@ def main():
         
         # 利用者及び家族の生活に対する意向
         st.subheader("利用者及び家族の生活に対する意向")
-        client_family_intentions = st.text_area(
-            "利用者・家族の意向を入力してください",
-            height=150
-        )
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            if 'client_family_intentions' not in st.session_state:
+                st.session_state.client_family_intentions = ""
+            
+            client_family_intentions = st.text_area(
+                "利用者・家族の意向を入力してください",
+                value=st.session_state.client_family_intentions,
+                height=150,
+                key="intentions_textarea"
+            )
+        with col2:
+            if st.button("AIで生成", key="generate_intentions"):
+                if 'user_info' in st.session_state and 'adl_data' in st.session_state:
+                    with st.spinner("生成中..."):
+                        generated_text = generate_intentions_text(
+                            st.session_state.user_info,
+                            st.session_state.adl_data
+                        )
+                        if generated_text:
+                            st.session_state.client_family_intentions = generated_text
+                            st.rerun()
+                else:
+                    st.warning("基本情報とADLデータを先に入力してください")
         
         # 介護認定審査会の意見及びサービスの種類の指定
         st.subheader("介護認定審査会の意見及びサービスの種類の指定")
-        certification_opinion = st.text_area(
-            "介護認定審査会の意見を入力してください",
-            height=100
-        )
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            if 'certification_opinion' not in st.session_state:
+                st.session_state.certification_opinion = ""
+            
+            certification_opinion = st.text_area(
+                "介護認定審査会の意見を入力してください",
+                value=st.session_state.certification_opinion,
+                height=100,
+                key="opinion_textarea"
+            )
+        with col2:
+            if st.button("AIで生成", key="generate_opinion"):
+                if 'user_info' in st.session_state and 'adl_data' in st.session_state:
+                    with st.spinner("生成中..."):
+                        generated_text = generate_certification_opinion(
+                            st.session_state.user_info,
+                            st.session_state.adl_data
+                        )
+                        if generated_text:
+                            st.session_state.certification_opinion = generated_text
+                            st.rerun()
+                else:
+                    st.warning("基本情報とADLデータを先に入力してください")
         
         # 総合的な援助の方針
         st.subheader("総合的な援助の方針")
-        support_policy = st.text_area(
-            "総合的な援助の方針を入力してください",
-            height=150
-        )
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            if 'support_policy' not in st.session_state:
+                st.session_state.support_policy = ""
+            
+            support_policy = st.text_area(
+                "総合的な援助の方針を入力してください",
+                value=st.session_state.support_policy,
+                height=150,
+                key="policy_textarea"
+            )
+        with col2:
+            if st.button("AIで生成", key="generate_policy"):
+                if 'user_info' in st.session_state and 'adl_data' in st.session_state:
+                    with st.spinner("生成中..."):
+                        generated_text = generate_support_policy(
+                            st.session_state.user_info,
+                            st.session_state.adl_data,
+                            st.session_state.client_family_intentions,
+                            st.session_state.certification_opinion
+                        )
+                        if generated_text:
+                            st.session_state.support_policy = generated_text
+                            st.rerun()
+                else:
+                    st.warning("基本情報とADLデータを先に入力してください")
         
         st.divider()
         
@@ -1571,99 +1965,103 @@ def main():
             st.warning("基本情報とADLデータを先に入力してください")
             return
         
-        st.subheader("利用者の要望")
-        client_needs = st.text_area(
-            "具体的な要望を入力してください",
-            height=100,
-            placeholder="例：母親の結婚式に参加したい、自宅で生活を続けたい、趣味の園芸を続けたい"
-        )
+        # 生成済みケアプランの状態管理
+        if 'current_care_plan' not in st.session_state:
+            st.session_state.current_care_plan = None
+            st.session_state.current_client_needs = None
         
-        if st.button("ケアプランを生成", type="primary"):
-            if not client_needs:
-                st.warning("利用者の要望を入力してください")
-                return
+        if not st.session_state.current_care_plan:
+            st.subheader("利用者の要望")
+            client_needs = st.text_area(
+                "具体的な要望を入力してください",
+                height=100,
+                placeholder="例：母親の結婚式に参加したい、自宅で生活を続けたい、趣味の園芸を続けたい"
+            )
+            
+            if st.button("ケアプランを生成", type="primary"):
+                if not client_needs:
+                    st.warning("利用者の要望を入力してください")
+                    return
                 
-            with st.spinner("ケアプランを生成中..."):
-                care_plan = generate_care_plan(
-                    st.session_state.user_info,
-                    st.session_state.adl_data,
-                    client_needs
-                )
+                with st.spinner("ケアプランを生成中..."):
+                    care_plan = generate_care_plan(
+                        st.session_state.user_info,
+                        st.session_state.adl_data,
+                        client_needs
+                    )
+                    
+                    if care_plan:
+                        st.session_state.current_care_plan = care_plan
+                        st.session_state.current_client_needs = client_needs
+                        st.rerun()
+        
+        # 生成済みケアプランの表示
+        if st.session_state.current_care_plan:
+            st.success("ケアプランが生成されました")
+            
+            # 新しいケアプランの生成ボタン
+            if st.button("新しいケアプランを生成"):
+                st.session_state.current_care_plan = None
+                st.session_state.current_client_needs = None
+                st.rerun()
+            
+            st.subheader("生成されたケアプラン")
+            st.markdown(st.session_state.current_care_plan)
+            
+            # ダウンロードボタンのコンテナ
+            download_container = st.container()
+            with download_container:
+                col1, col2, col3 = st.columns(3)
                 
-                if care_plan:
-                    st.session_state.generated_care_plan = care_plan
-                    
-                    # 履歴に保存
-                    history_entry = {
-                        'timestamp': datetime.now(),
-                        'user_info': st.session_state.user_info,
-                        'adl_data': st.session_state.adl_data,
-                        'client_needs': client_needs,
-                        'care_plan': care_plan
-                    }
-                    st.session_state.care_plan_history.append(history_entry)
-                    
-                    st.success("ケアプランが生成されました")
-                    
-                    st.subheader("生成されたケアプラン")
-                    st.markdown(care_plan)
-                    
-                    # ダウンロードボタンのセクション
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
+                with col1:
+                    st.download_button(
+                        "テキスト形式でダウンロード",
+                        st.session_state.current_care_plan,
+                        "care_plan.txt",
+                        "text/plain",
+                        use_container_width=True
+                    )
+                
+                with col2:
+                    excel_buffer = create_care_plan_excel(
+                        st.session_state.user_info,
+                        st.session_state.adl_data,
+                        st.session_state.current_care_plan
+                    )
+                    if excel_buffer:
                         st.download_button(
-                            "テキスト形式でダウンロード",
-                            care_plan,
-                            "care_plan.txt",
-                            "text/plain"
+                            "エクセル形式でダウンロード",
+                            excel_buffer,
+                            "care_plan.xlsx",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
                         )
-                    
-                    with col2:
-                        excel_buffer = create_care_plan_excel(
-                            st.session_state.user_info,
-                            st.session_state.adl_data,
-                            care_plan
+                
+                with col3:
+                    pdf_buffer = create_care_plan_pdf(
+                        st.session_state.user_info,
+                        st.session_state.adl_data,
+                        st.session_state.current_care_plan
+                    )
+                    if pdf_buffer:
+                        st.download_button(
+                            "PDF形式でダウンロード",
+                            pdf_buffer,
+                            "care_plan.pdf",
+                            "application/pdf",
+                            use_container_width=True
                         )
-                        if excel_buffer:
-                            st.download_button(
-                                "エクセル形式でダウンロード",
-                                excel_buffer,
-                                "care_plan.xlsx",
-                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
-                    
-                    with col3:
-                        pdf_buffer = create_care_plan_pdf(
-                            st.session_state.user_info,
-                            st.session_state.adl_data,
-                            care_plan
-                        )
-                        if pdf_buffer:
-                            st.download_button(
-                                "PDF形式でダウンロード",
-                                pdf_buffer,
-                                "care_plan.pdf",
-                                "application/pdf"
-                            )
-        
-        # 第2表の編集セクション
-        st.subheader("居宅サービス計画書（2）の編集")
-        
-        if 'care_plan_data' not in st.session_state:
-            st.session_state.care_plan_data = {
-                'user_info': st.session_state.user_info if 'user_info' in st.session_state else {},
-                'issues': []
-            }
-        
-        # 課題の編集機能
-        edit_care_plan_issue()
-        
-        # プレビューの表示
-        if st.session_state.care_plan_data['issues']:
-            st.subheader("第2表プレビュー")
-            preview_html = preview_care_plan_table_2(st.session_state.care_plan_data)
-            st.markdown(preview_html, unsafe_allow_html=True)
+            
+            # 履歴への保存
+            if st.session_state.current_care_plan not in [h['care_plan'] for h in st.session_state.care_plan_history]:
+                history_entry = {
+                    'timestamp': datetime.now(),
+                    'user_info': st.session_state.user_info,
+                    'adl_data': st.session_state.adl_data,
+                    'client_needs': st.session_state.current_client_needs,
+                    'care_plan': st.session_state.current_care_plan
+                }
+                st.session_state.care_plan_history.append(history_entry)
     
     elif page == "履歴管理":
         st.header("履歴管理")
