@@ -22,13 +22,26 @@ from reportlab.lib.units import mm  # PDFの単位設定用
 # 環境変数の読み込み（ローカル開発用）
 load_dotenv()
 
-# OpenAI APIクライアントの初期化
-if 'OPENAI_API_KEY' not in st.secrets and not os.getenv('OPENAI_API_KEY'):
+# OpenAI APIキーの設定
+api_key = None
+if 'OPENAI_API_KEY' in st.secrets:
+    api_key = st.secrets['OPENAI_API_KEY']
+elif os.getenv('OPENAI_API_KEY'):
+    api_key = os.getenv('OPENAI_API_KEY')
+
+if not api_key:
     st.error('OpenAI APIキーが設定されていません。')
     st.stop()
 
-api_key = st.secrets.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
-client = OpenAI(api_key=api_key)
+# OpenAI APIクライアントの初期化
+try:
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://api.openai.com/v1"  # 明示的にベースURLを指定
+    )
+except Exception as e:
+    st.error(f'OpenAI APIクライアントの初期化に失敗しました: {str(e)}')
+    st.stop()
 
 # Streamlitページの基本設定
 st.set_page_config(
